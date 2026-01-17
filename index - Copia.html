@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Corrida Infinita - Proteção de Tela</title>
+    <style>
+        body { margin: 0; background: #111; font-family: 'Segoe UI', Arial; display: flex; flex-direction: column; align-items: center; color: white; overflow: hidden; height: 100vh; justify-content: center; }
+        canvas { width: 95%; max-width: 1100px; height: 600px; background: #234d1e; border: 4px solid #444; border-radius: 12px; box-shadow: 0 0 30px rgba(0,0,0,0.7); }
+        #controls { display: flex; gap: 15px; padding: 20px; flex-wrap: wrap; align-items: center; justify-content: center; background: rgba(255,255,255,0.05); width: 100%; }
+        .btn { padding: 12px 25px; cursor: pointer; border-radius: 8px; border: none; font-weight: bold; color: white; text-transform: uppercase; transition: 0.1s; font-size: 13px; }
+        .btn:active { transform: scale(0.95); }
+        .spawn { background: #e67e22; box-shadow: 0 4px #a05815; }
+        .conn-container { display: flex; align-items: center; gap: 10px; background: rgba(0,0,0,0.3); padding: 10px 15px; border-radius: 50px; border: 1px solid #444; }
+        .dot { width: 12px; height: 12px; border-radius: 50%; background: #ff4d4d; box-shadow: 0 0 10px #ff4d4d; transition: 0.3s; }
+        .dot.online { background: #2ecc71; box-shadow: 0 0 10px #2ecc71; }
+        .conn-text { font-size: 12px; font-weight: bold; color: #ccc; }
+        .status-top { position: absolute; top: 10px; right: 20px; color: #aaa; font-size: 12px; }
+    </style>
+</head>
+<body>
+
+    <div id="status" class="status-top">Aguardando...</div>
+    <canvas id="game" width="1100" height="600"></canvas>
+
+    <div id="controls">
+        <div class="conn-container">
+            <div id="connDot" class="dot"></div>
+            <span id="connText" class="conn-text">TIKFINITY: OFFLINE</span>
+        </div>
+        <button id="spawnBtn" class="btn spawn" onclick="spawnRunner()">Iniciar Corrida Infinita</button>
+    </div>
+
+<script>
+    const bgPista = new Image();
+bgPista.src = 'assets/bkc.png'; // Certifique-se que o caminho está correto
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+
+const runners = [];
+let raceStarted = false;
+let cameraX = 0;
+let loadedCount = 0;
+const TOTAL_ASSETS = 12; 
+
+const foodData = {
+    p: { img: new Image(), file: 'd1.webp', color: '#ff4d4d' },
+    a: { img: new Image(), file: 'd2.webp', color: '#ffe11d' },
+    b: { img: new Image(), file: 'd3.webp', color: '#ff944d' },
+    c: { img: new Image(), file: 'd4.webp', color: '#9d4dff' }
+};
+
+let activeFoods = [];
+const spritesPista = { p: new Image(), a: new Image(), b: new Image(), c: new Image() };
+const spritesRanking = { p: new Image(), a: new Image(), b: new Image(), c: new Image() };
+
+function loadAssets() {
+    ['p', 'a', 'b', 'c'].forEach((char) => {
+        spritesPista[char].src = `assets/${char}.png`;
+        spritesPista[char].onload = checkLoad;
+        spritesRanking[char].src = `assets/${char}1.png`;
+        spritesRanking[char].onload = checkLoad;
+        foodData[char].img.src = `assets/${foodData[char].file}`;
+        foodData[char].img.onload = checkLoad;
+    });
+}
+
+function checkLoad() {
+    loadedCount++;
+    document.getElementById('status').innerText = `Assets: ${loadedCount}/${TOTAL_ASSETS}`;
+}
+
+function connectTikFinity() {
+    const socket = new WebSocket('ws://localhost:21213/');
+    socket.onopen = () => {
+        document.getElementById('connDot').classList.add('online');
+        document.getElementById('connText').innerText = "TIKFINITY: CONECTADO";
+        document.getElementById('connText').style.color = "#2ecc71";
+    };
+    socket.onmessage = (e) => {
+        const res = JSON.parse(e.data);
+        if (!res.data) return;
+        if (res.event.toLowerCase() === 'gift') {
+            const giftName = res.data.giftName.toLowerCase();
+            if (giftName === 'rosa') spawnSpecificFood('c');
+            else if (giftName === 'estou pronto') spawnSpecificFood('p');
+            else if (giftName === 'fatia de bolo') spawnSpecificFood('a');
+            else if (giftName === 'gg') spawnSpecificFood('b');
+        }
+    };
+    socket.onclose = () => {
+        document.getElementById('connDot').classList.remove('online');
+        document.getElementById('connText').innerText = "TIKFINITY: OFFLINE";
+        setTimeout(connectTikFinity, 5000); 
+    };
+}
+
+function spawnRunner() {
+    if (runners.length >= 4 || raceStarted) return;
+    const types = ['p', 'a', 'b', 'c'];
+    for(let i=0; i<4; i++) {
+        runners.push({
+            type: types[i],
+            x: 100,
+            y: i * 125 + 180, 
+            distanceTraveled: 0,
+            baseSpeed: 2.1, 
+            aiLogic: { sprintCooldown: 100 },
+            boostQueue: [],
+            foodCount: 0
+        });
+    }
+    document.getElementById('spawnBtn').disabled = true;
+    setTimeout(() => { 
+        raceStarted = true; 
+        ['p', 'a', 'b', 'c'].forEach(type => spawnSpecificFood(type)); // Onda inicial
+        setInterval(spawnAmbienceFood, 8000); 
+    }, 1000);
+}
+
+function spawnSpecificFood(type) {
+    if (!raceStarted) return;
+    const targetRunner = runners.find(r => r.type === type);
+    if (targetRunner) {
+        activeFoods.push({
+            type: type,
+            x: cameraX + canvas.width + 150, 
+            y: targetRunner.y,
+            collected: false
+        });
+    }
+}
+
+function spawnAmbienceFood() {
+    if (!raceStarted) return;
+    const type = ['p', 'a', 'b', 'c'][Math.floor(Math.random()*4)];
+    spawnSpecificFood(type);
+}
+
+function drawTrack() {
+    for (let i = 0; i < 4; i++) {
+        const y = i * 125 + 120;
+        const h = 115;
+
+        // 1. Desenha o fundo (bkc.png)
+        if (bgPista.complete) {
+            // Cálculo para a imagem repetir horizontalmente acompanhando a câmera
+            let patternWidth = bgPista.width || 500; // Largura padrão caso não carregue
+            let startX = Math.floor(cameraX / patternWidth) * patternWidth;
+            
+            for (let bx = startX; bx < startX + canvas.width + patternWidth; bx += patternWidth) {
+                ctx.drawImage(bgPista, bx, y, patternWidth, h);
+            }
+        } else {
+            // Cor de backup caso a imagem falhe
+            ctx.fillStyle = i % 2 === 0 ? "#2d5a27" : "#35662d";
+            ctx.fillRect(cameraX, y, canvas.width, h);
+        }
+
+        // 2. Desenha as faixas brancas (Grade)
+        ctx.strokeStyle = "rgba(255,255,255,0.15)"; // Aumentei um pouco a opacidade para destacar no fundo
+        ctx.lineWidth = 2;
+        let step = 200;
+        let startGridX = Math.floor(cameraX / step) * step;
+        
+        for (let gx = startGridX; gx < startGridX + canvas.width + step; gx += step) {
+            ctx.strokeRect(gx, y, step, h);
+        }
+    }
+}
+
+function update() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    let maxPos = 0;
+    if (runners.length > 0) {
+        maxPos = Math.max(...runners.map(r => r.x));
+        if (raceStarted) {
+            let targetCamX = maxPos - 300;
+            // Interpolação da câmera (suave)
+            cameraX += (targetCamX - cameraX) * 0.08;
+        }
+    }
+
+    ctx.save();
+    ctx.translate(-cameraX, 0);
+    drawTrack();
+
+    activeFoods.forEach(f => {
+        if (!f.collected) {
+            const config = foodData[f.type];
+            if (config.img.complete) {
+                ctx.save();
+                ctx.shadowBlur = 15;
+                ctx.shadowColor = config.color;
+                ctx.drawImage(config.img, f.x - 30, f.y - 30, 60, 60);
+                ctx.restore();
+            }
+            runners.forEach(r => {
+                if (r.type === f.type && Math.abs(r.x - f.x) < 45) {
+                    f.collected = true;
+                    r.foodCount++;
+                    for(let i=0; i<50; i++) r.boostQueue.push(4.5); 
+                }
+            });
+        }
+    });
+    activeFoods = activeFoods.filter(f => !f.collected && f.x > cameraX - 200);
+
+    runners.forEach(r => {
+        if (raceStarted) {
+            // IA RUBBER BANDING
+            let distanceToLeader = maxPos - r.x;
+            let catchUpBonus = 0;
+            
+            // Se estiver longe do líder, acelera
+            if (distanceToLeader > 400) {
+                catchUpBonus = (distanceToLeader - 400) * 0.08 + 2.0;
+            }
+
+            // --- PROTEÇÃO DE SAÍDA DE TELA ---
+            const screenLimit = cameraX + 80; // Margem de segurança na esquerda
+            if (r.x < screenLimit) {
+                r.x = screenLimit; // Trava o personagem na borda esquerda
+                catchUpBonus += 3.0; // Dá um empurrão extra
+            }
+
+            r.aiLogic.sprintCooldown--;
+            if (r.aiLogic.sprintCooldown <= 0) {
+                for(let i=0; i<25; i++) r.boostQueue.push(1.2 + Math.random());
+                r.aiLogic.sprintCooldown = 150 + Math.random() * 250;
+            }
+
+            const bVal = r.boostQueue.length > 0 ? r.boostQueue.shift() : 0;
+            const moveStep = r.baseSpeed + bVal + catchUpBonus + (Math.random() * 0.4);
+            
+            r.x += moveStep;
+            r.distanceTraveled += moveStep;
+        }
+
+        const jumpY = Math.abs(Math.sin(r.x * 0.04)) * 25; 
+        const rot = Math.sin(r.x * 0.04) * 0.1;
+        const img = spritesPista[r.type];
+        if (img.complete) {
+            ctx.save();
+            ctx.translate(r.x, r.y - jumpY);
+            ctx.rotate(rot);
+            ctx.fillStyle = "rgba(0,0,0,0.2)";
+            ctx.beginPath();
+            ctx.ellipse(0, 40 + jumpY, 25, 8, 0, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.drawImage(img, -45, -45, 90, 90);
+            ctx.restore();
+        }
+    });
+    ctx.restore();
+
+    if (runners.length > 0) {
+        let ranking = [...runners].sort((a, b) => b.distanceTraveled - a.distanceTraveled);
+        ctx.fillStyle = "rgba(0,0,0,0.85)";
+        ctx.fillRect(0, 0, canvas.width, 85);
+        ranking.forEach((r, i) => {
+            const xPos = 50 + (i * 240);
+            const imgRank = spritesRanking[r.type];
+            if (imgRank.complete) ctx.drawImage(imgRank, xPos, 10, 55, 55);
+            ctx.fillStyle = i === 0 ? "#f1c40f" : "white";
+            ctx.font = "bold 16px Arial";
+            ctx.fillText(`${i+1}º Lugar`, xPos + 65, 35);
+            ctx.fillStyle = "#aaa";
+            ctx.font = "14px Arial";
+            ctx.fillText(`Alimentos: ${r.foodCount}`, xPos + 65, 55);
+        });
+    }
+    requestAnimationFrame(update);
+}
+
+loadAssets();
+connectTikFinity();
+update();
+</script>
+</body>
+</html>
